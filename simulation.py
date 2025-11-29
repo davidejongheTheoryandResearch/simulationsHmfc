@@ -1,16 +1,16 @@
 """
-Dit programma simuleert 2 groepen (controle vs "OCD-achtige" groep) gebruik makend van dit model:
+This program simulates two groups (a control group vs. an “OCD-like” group) using the following model:
     y_t ~ Bernoulli( f( w^T u_t + x_t ) )
 
-    met:
-    - u_t : input vector op trial t
-    - w   : gewichten op de inputs
-    - x_t : latent criterium, AR(1)-proces
-    - f   : logistische link (sigmoid)
+    with:
+    - u_t : input vector on trial t
+    - w   : weights on the inputs
+    - x_t : latent criterion, modeled as an AR(1) process
+    - f   : logistic link function (sigmoid)
 
-- Onderliggende (ware) d' is gelijk in beide groepen.
-- De OCD-groep heeft grotere criteriumfluctuaties (hogere standaardafwijking van error component (eps) en a dichter bij 1)
-- we passen achteraf klassieke SDT met statisch criterium toe en kijken naar geobserveerde d' per subject
+    - The underlying (true) d′ is identical in both groups.
+	- The OCD group has larger criterion fluctuations (higher standard deviation of the error component \varepsilon and a closer to 1).
+	- Afterwards, we apply classical SDT with a static criterion and examine the observed d′ for each subject.
 """
 
 import numpy as np
