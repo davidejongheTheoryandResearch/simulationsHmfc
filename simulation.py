@@ -1,41 +1,62 @@
 """
-This program simulates two groups (a control group vs. an “OCD-like” group) using the following model:
+Simulation of two groups (control vs. "OCD-like") using a dynamic-criterion SDT model.
+
+Model:
     y_t ~ Bernoulli( f( w^T u_t + x_t ) )
 
-    with:
+where:
     - u_t : input vector on trial t
     - w   : weights on the inputs
-    - x_t : latent criterion, modeled as an AR(1) process
+    - x_t : latent decision criterion, modeled as an AR(1) process
     - f   : logistic link function (sigmoid)
 
-    - The underlying (true) d′ is identical in both groups.
-	- The OCD group has larger criterion fluctuations (higher standard deviation of the error component \varepsilon and a closer to 1).
-	- Afterwards, we apply classical SDT with a static criterion and examine the observed d′ for each subject.
+Design:
+    - The underlying (true) sensitivity d' is identical in both groups.
+    - The OCD-like group has larger criterion fluctuations:
+        * higher standard deviation of the AR(1) noise term ε
+        * autoregressive parameter a closer to 1
+    - After simulating responses, we fit a classical SDT model with a static criterion and examine observed d' and confidence for each subject.
 """
 
 import numpy as np
 from scipy.stats import norm
 import matplotlib.pyplot as plt
 from scipy.stats import ttest_ind
-#--------------------------------------------------------------------------
-# d' en criterium c berekenen van klassieke SDT taak (zonder fluctuations)
-#--------------------------------------------------------------------------
 
-def dprime_berekening(stim, resp):
+# -------------------------------------------------------------------------
+# Classical SDT: compute d' and criterion c from hits and false alarms
+# -------------------------------------------------------------------------
+
+def compute_dprime(stim, resp):
     """
-    stim: 0 = noise, 1 = signal
-    resp: 0 = 'nee', 1 = 'ja'
+    Compute d' and decision criterion c from a yes/no SDT task.
+
+    Parameters
+    ----------
+    stim : array-like of int
+        Stimulus labels per trial.
+        0 = noise, 1 = signal.
+    resp : array-like of int
+        Binary responses per trial.
+        0 = "no", 1 = "yes".
+
+    Returns
+    -------
+    d_prime : float
+        Sensitivity index d'.
+    c : float
+        Decision criterion.
     """
     stim = np.asarray(stim)
     resp = np.asarray(resp)
 
-    #Hit rate: P(ja|signal)
+    # Hit rate: P("yes" | signal)
     hit_rate = np.mean(resp[stim == 1] == 1)
-    #False alarm rate: P(ja|noise)
+    # False alarm rate: P("yes" | noise)
     fa_rate = np.mean(resp[stim == 0] == 1)
 
-    #voorkom 0 of 1 (anders z naar oneindig) 
-    # heb ik moeten vragen aan AI
+    # Avoid 0 or 1 (would send z to ±∞)
+    # Had to ask AI
     eps = 1e-4
     hit_rate = np.clip(hit_rate, eps, 1-eps)
     fa_rate = np.clip(fa_rate, eps, 1-eps)
@@ -48,18 +69,18 @@ def dprime_berekening(stim, resp):
 
     return d_prime, c
 
-# ------------------------------------------------
-# functie sigmoid transformatie
-# ------------------------------------------------
+# -------------------------------------------------------------------------
+# Logistic link function
+# -------------------------------------------------------------------------
 
 def logistic(z):
     return 1.0/(1.0 + np.exp(-z))
 
-# ------------------------------------------------------------
-# 1 subject simuleren: y_t ~ Bernoulli( f( w^T u_t + x_t ) )
-# ------------------------------------------------------------
+# -------------------------------------------------------------------------
+# Simulate a single subject: y_t ~ Bernoulli( f( w^T u_t + x_t ) )
+# -------------------------------------------------------------------------
 
-def simulatie_bernoulli(
+def simulate_subject(
         n_trials = 1000,
         n_inputs = 3,
         a = .9,
@@ -71,64 +92,93 @@ def simulatie_bernoulli(
         seed = None
 ):
     """
-    Simuleert één subject met het model:
-        x_t = b + a * x_{t-1} + eps_t      (AR(1) criterium)
-        z_t = w^T u_t + x_t                (lineaire voorspeller)
+    Simulate one subject under a dynamic-criterion SDT model.
+
+    Latent process:
+        x_t = b + a * x_{t-1} + eps_t          (AR(1) decision criterion)
+        z_t = w^T u_t + x_t                    (linear predictor)
         p_t = logistic(z_t)
         y_t ~ Bernoulli(p_t)
 
-    u_t bevat hier o.a. een stimulus-dimensie:
-    - u[:, 0] = stim (0 = noise, 1 = signal)
-    - u[:, 1:] zijn de andere covariaten (ruis), mean-centered
-    Voor dit trucje heb ik AI even geraadpleegd
+    Inputs:
+        - We keep a 0/1 stimulus code for SDT analyses (stim: 0 = noise, 1 = signal).
+        - For the decision variable, we use a signed stimulus code: stim_signed = -1 (noise), +1 (signal),
+          so that the two internal evidence distributions are symmetric around 0.
 
-    PARAMETERS:
-        n_trials = aantal trials
-        n_inputs = dimensie van u_t
-        a = autocorrelatie van AR(1)
-        sigma_eps = standaardafwijking van de ruis eps_t
-        b = Intercept van AR(1)
-        w = vector met gewichten (als None => sample uit N(0, 0.5^2))
-        p_signal = kans op een signal-trial
-        Seed = Random seed (handig om te reproduceren)
+    Parameters
+    ----------
+    n_trials : int
+        Number of trials to simulate.
+    n_inputs : int
+        Dimensionality of input vector u_t.
+    a : float
+        AR(1) autoregressive coefficient for the criterion x_t.
+    sigma_eps : float
+        Standard deviation of the AR(1) noise term ε_t.
+    b : float
+        Intercept of the AR(1) process.
+    w : array-like or None
+        Weight vector for the inputs. If None, only the first input (stimulus)
+        is used with weight d_true; all other inputs are set to 0.
+    p_signal : float
+        Probability of a signal trial (P(stim=1)).
+    d_true : float
+        "True" underlying sensitivity parameter (used as weight on the stimulus input).
+    seed : int or None
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    result : dict
+        Dictionary containing:
+        - "y"      : responses (0/1)
+        - "p"      : response probabilities
+        - "x"      : latent criterion time series
+        - "u"      : input matrix
+        - "w"      : weight vector
+        - "stim"   : 0/1 stimulus labels (for SDT)
+        - "conf"   : confidence per trial, defined as |dv - x|
     """
 
     rng = np.random.default_rng(seed)
 
-    # Stimulus: 0 = noise, 1 = signal
+    # Stimulus for SDT: 0 = noise, 1 = signal
     stim = rng.binomial(1, p_signal, size = n_trials)
 
-    # Gewichten w:
+    # Signed stimulus for the decision variable: -1 (noise), +1 (signal)
+    stim_signed = 2 * stim - 1 # 0 -> -1 and 1 -> +1
+
+    # Weights w
     if w is None:
         w = np.zeros(n_inputs)
-        w[0] = d_true #dit zorgt ervoor dat beide groepen dezelfde ECHTE gevoeligheid hebben
+        # The first input is the (signed) stimulus, with weight equal to d_true
+        w[0] = d_true
 
-    # Inputs u: eerste kolom = stim, rest is ruis
+    # Inputs u: first column = signed stimulus, remaining columns = mean-centered noise covariates
     u = np.zeros((n_trials, n_inputs))
-    u[:, 0] = stim
+    u[:, 0] = stim_signed
 
     if n_inputs > 1:
         other = rng.normal(loc = 0.0, scale = 1.0, size = (n_trials, n_inputs-1))
-        other -= other.mean(axis = 0, keepdims = True) #mean is 0
+        other -= other.mean(axis = 0, keepdims = True) # mean-center each column
         u[:, 1:] = other
 
-    # Latent criterium x_t 
-    x = np.zeros(n_trials) #We initiëren een array van lengte n_trials waarin elke waarde gelijk is aan 0
+    # Latent criterion x_t (AR(1) process)
+    x = np.zeros(n_trials) 
     x[0] = 0.0
     for t in range(1, n_trials):
         eps_t = rng.normal(loc = 0.0, scale = sigma_eps)
         x[t] = b + a * x[t-1] + eps_t
 
-    #Lineaire voorspeller en kans op respons (AI gebruikt voor dit deeltje)
-    # z_t = w^T u_t + x_t
+    # Linear predictor and response probabilities
     dv = u @ w #decision variable
     linpred = dv + x
     p = logistic(linpred)
 
-    #Binaire respons y_t ~ bernoulli(p_t)
+    # Binary responses y_t ~ Bernoulli(p_t)
     y = rng.binomial(1, p, size = n_trials)
 
-    #confidence: |decision variable - criterium|
+    # Confidence: distance between decision variable and current criterion
     conf = np.abs(dv - x)
 
     return {
@@ -137,13 +187,13 @@ def simulatie_bernoulli(
         "x" : x,
         "u" : u,
         "w" : w,
-        "stim" : stim,
-        "conf" : conf
+        "stim" : stim,  # keep 0/1 code for classical SDT
+        "conf" : conf   # |dv - x|
     }
 
-#------------------------------------------------
-# Twee groepen simuleren (controle vs "OCD")
-#------------------------------------------------
+# -------------------------------------------------------------------------
+# Simulate a group of subjects (control or OCD-like)
+# -------------------------------------------------------------------------
 
 def simulate_group(
     n_subj = 30,
@@ -156,15 +206,38 @@ def simulate_group(
     seed = 0
 ):
     """
-    Simuleert een groep mensen met dezelfde a, sigma_eps, b.
-    Maar elke persoon heeft andere w en u
+    Simulate a group of subjects with shared AR(1) parameters, but different random seeds.
+
+    Parameters
+    ----------
+    n_subj : int
+        Number of subjects.
+    n_trials : int
+        Number of trials per subject.
+    n_inputs : int
+        Dimensionality of input vector u_t.
+    a : float
+        AR(1) autoregressive coefficient for the criterion x_t.
+    sigma_eps : float
+        Standard deviation of the AR(1) noise term ε_t.
+    b : float
+        Intercept of the AR(1) process.
+    d_true : float
+        "True" underlying sensitivity (weight on stimulus input).
+    seed : int or None
+        Seed for the group-level RNG that generates subject-level seeds.
+
+    Returns
+    -------
+    subjects : list of dict
+        Each element is the dictionary returned by `simulate_subject`
     """
     rng = np.random.default_rng(seed)
     subjects = []
 
     for i in range(n_subj):
         subj_seed = rng.integers(1e9) #zorgt voor willekeur
-        sim = simulatie_bernoulli(
+        sim = simulate_subject(
             n_trials= n_trials,
             n_inputs= n_inputs,
             a = a,
@@ -178,28 +251,36 @@ def simulate_group(
         subjects.append(sim)
     return subjects
 
+# -------------------------------------------------------------------------
+# Main analysis: simulate both groups, compute SDT measures, and plot results
+# -------------------------------------------------------------------------
+
 def main():
-    # Parameters
+    # -----------------------------
+    # Simulation parameters
+    # -----------------------------
     n_subj = 300
     n_trials = 5000
     n_inputs = 3
     d_true = 1.5
 
-    # Controlegroep: lagere fluctuaties
-    a_controle = .5
-    sigma_controle = .15
+    # Control group: smaller criterion fluctuations
+    a_control = .5
+    sigma_control = .15
 
-    # OCD-groep: hogere fluctuaties
+    # OCD-like group: larger criterion fluctuations
     a_OCD = .95
     sigma_OCD = .40
 
-    #simuleer de groepen
-    controle_subjects = simulate_group(
+    # -----------------------------
+    # Simulate both groups
+    # -----------------------------
+    control_subjects = simulate_group(
         n_subj= n_subj,
         n_trials= n_trials,
         n_inputs= n_inputs,
-        a = a_controle,
-        sigma_eps= sigma_controle,
+        a = a_control,
+        sigma_eps= sigma_control,
         b = 0,
         d_true= d_true,
         seed = None
@@ -216,68 +297,98 @@ def main():
         seed = None
     )
 
-    #-----------------------------------
-    # d' per subject berekenen
-    #-----------------------------------
+    # -----------------------------
+    # Compute d' and mean confidence per subject
+    # -----------------------------
 
-    d_controle = []
+    d_control = []
     d_OCD = []
-    conf_mean_controle = []
+    conf_mean_control = []
     conf_mean_OCD = []
+   
 
-    for subj in controle_subjects:
+    for subj in control_subjects:
         stim = subj["stim"]
         resp = subj["y"]
-        d_prime, c = dprime_berekening(stim, resp)
-        d_controle.append(d_prime)
-        conf_mean_controle.append(subj["conf"].mean())
+        d_prime, c = compute_dprime(stim, resp)
+        d_control.append(d_prime)
+        conf_mean_control.append(subj["conf"].mean())
 
     for subj in OCD_subjects:
         stim = subj["stim"]
         resp = subj["y"]
-        d_prime, c = dprime_berekening(stim, resp)
+        d_prime, c = compute_dprime(stim, resp)
         d_OCD.append(d_prime)
         conf_mean_OCD.append(subj["conf"].mean())
 
-    d_controle = np.array(d_controle)
+    d_control = np.array(d_control)
     d_OCD = np.array(d_OCD)
-    conf_mean_controle = np.array(conf_mean_controle)
+    conf_mean_control = np.array(conf_mean_control)
     conf_mean_OCD      = np.array(conf_mean_OCD)
 
-    print("--- Geobserveerde d' per groep (klassieke SDT-fit) ---")
-    print(f"Controle: mean d' = {d_controle.mean():.3f}, SD = {d_controle.std():.3f}")
-    print(f"OCD:      mean d' = {d_OCD.mean():.3f}, SD = {d_OCD.std():.3f}")
+    print("--- Observed d' per group (classical SDT fit) ---")
+    print(f"Control: mean d' = {d_control.mean():.3f}, SD = {d_control.std():.3f}")
+    print(f"OCD:     mean d' = {d_OCD.mean():.3f}, SD = {d_OCD.std():.3f}")
 
-    print("--- Gemiddelde confidence per groep ---")
-    print(f"Controle: mean conf = {conf_mean_controle.mean():.3f}, SD = {conf_mean_controle.std():.3f}")
-    print(f"OCD:      mean conf = {conf_mean_OCD.mean():.3f}, SD = {conf_mean_OCD.std():.3f}")
+    print("--- Mean confidence per group ---")
+    print(
+        f"Control: mean conf = {conf_mean_control.mean():.3f}, "
+        f"SD = {conf_mean_control.std():.3f}"
+    )
+    print(
+        f"OCD:     mean conf = {conf_mean_OCD.mean():.3f}, "
+        f"SD = {conf_mean_OCD.std():.3f}"
+    )
 
-    #-----------------------------------------------------------------------------------------------------------------
-    # Grafische voorstelling (hier heb ik wel wat hulp gehad van AI om te weten te komen hoe je dit mooi vorm geeft)
-    #-----------------------------------------------------------------------------------------------------------------
+    # -----------------------------
+    # Compute observed c per group
+    # -----------------------------
 
-    # Gemiddelde en standaardfout per groep
-    mean_d_controle = d_controle.mean()
-    mean_d_OCD  = d_OCD.mean()
-    mean_conf_controle = conf_mean_controle.mean()
-    mean_conf_OCD = conf_mean_OCD.mean()
+    c_control = []
+    c_OCD = []
 
-    se_d_controle = d_controle.std(ddof=1) / np.sqrt(len(d_controle))
-    se_d_OCD  = d_OCD.std(ddof=1) / np.sqrt(len(d_OCD))
-    se_conf_controle = conf_mean_controle.std(ddof=1) / np.sqrt(len(conf_mean_controle))
-    se_conf_OCD = conf_mean_OCD.std(ddof=1) / np.sqrt(len(conf_mean_OCD))
+    for subj in control_subjects:
+        d_prime, c = compute_dprime(subj["stim"], subj["y"])
+        c_control.append(c)
 
-    # t-test tussen groepen (AI geraadpleegd voor dit stukje)
-    tval_dprime, pval_dprime = ttest_ind(d_controle, d_OCD, equal_var=False)
-    tval_conf, pval_conf = ttest_ind(conf_mean_controle, conf_mean_OCD, equal_var=False)
+    for subj in OCD_subjects:
+        d_prime, c = compute_dprime(subj["stim"], subj["y"])
+        c_OCD.append(c)
+
+    c_control = np.array(c_control)
+    c_ocd = np.array(c_OCD)
+
+    print("--- Observed c per group ---")
+    print(f"control: mean c = {np.mean(c_control):.3f}")
+    print(f"OCD:      mean c = {np.mean(c_OCD):.3f}")
+
+    # -----------------------------
+    # Group-level t-tests (AI was used to figure this out)
+    # -----------------------------
+
+    tval_dprime, pval_dprime = ttest_ind(d_control, d_OCD, equal_var=False)
+    tval_conf, pval_conf = ttest_ind(conf_mean_control, conf_mean_OCD, equal_var=False)
 
     print(f"d': t = {tval_dprime:.3f}, p = {pval_dprime:.3e}")
     print(f"Confidence: t = {tval_conf:.3f}, p = {pval_conf:.3e}")
 
+    # -----------------------------
+    # Bar plot: d' and confidence by group (I had some help from AI here to figure out how to shape this nicely)
+    # -----------------------------
+    mean_d_control = d_control.mean()
+    mean_d_OCD  = d_OCD.mean()
+    mean_conf_control = conf_mean_control.mean()
+    mean_conf_OCD = conf_mean_OCD.mean()
+
+    se_d_control = d_control.std(ddof=1) / np.sqrt(len(d_control))
+    se_d_OCD  = d_OCD.std(ddof=1) / np.sqrt(len(d_OCD))
+    se_conf_control = conf_mean_control.std(ddof=1) / np.sqrt(len(conf_mean_control))
+    se_conf_OCD = conf_mean_OCD.std(ddof=1) / np.sqrt(len(conf_mean_OCD))
+
     #data in arrays
-    means_controle = np.array([mean_d_controle, mean_conf_controle])
+    means_control = np.array([mean_d_control, mean_conf_control])
     means_OCD = np.array([mean_d_OCD, mean_conf_OCD])
-    ses_controle = np.array([se_d_controle, se_conf_controle])
+    ses_control = np.array([se_d_control, se_conf_control])
     ses_OCD = np.array([se_d_OCD, se_conf_OCD])
 
     labels = ["d'", "confidence"]
@@ -286,21 +397,20 @@ def main():
 
     fig, ax = plt.subplots(figsize=(6, 5))
 
-    ax.bar(x - width/2, means_controle, width,
-        yerr=ses_controle, capsize=5, label="Controle")
+    ax.bar(x - width/2, means_control, width,
+        yerr=ses_control, capsize=5, label="control")
     ax.bar(x + width/2, means_OCD,  width,
         yerr=ses_OCD,  capsize=5, label="OCD")
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("Gemiddelde waarde")
-    ax.set_title("Groepsverschillen in d' en confidence (klassieke SDT)")
-
+    ax.set_ylabel("Mean value")
+    ax.set_title("Group differences in d' and confidence (classical SDT)")
     ax.axhline(0, color="black", linewidth=0.8)
     ax.legend()
 
-    # Kleine indicatie van significantie boven elke maat apart
-    def p_als_sterren(p):
+    # Significance stars helper
+    def p_to_stars(p):
         if p < 0.001:
             return "***"
         elif p < 0.01:
@@ -310,22 +420,22 @@ def main():
         else:
             return "n.s."
 
-    # d'-significantie boven eerste paar balken
-    y_max_d = max(means_controle[0] + ses_controle[0],
+    # Significance line for d'
+    y_max_d = max(means_control[0] + ses_control[0],
                   means_OCD[0]  + ses_OCD[0])
     y_sig_d = y_max_d + 0.05
     ax.plot([x[0] - width/2, x[0] + width/2],
             [y_sig_d, y_sig_d], color="black")
-    ax.text(x[0], y_sig_d + 0.02, p_als_sterren(pval_dprime),
+    ax.text(x[0], y_sig_d + 0.02, p_to_stars(pval_dprime),
             ha="center", va="bottom")
 
-    # confidence-significantie boven tweede paar balken
-    y_max_c = max(means_controle[1] + ses_controle[1],
+    # Significance line for confidence
+    y_max_c = max(means_control[1] + ses_control[1],
                   means_OCD[1]  + ses_OCD[1])
     y_sig_c = y_max_c + 0.05
     ax.plot([x[1] - width/2, x[1] + width/2],
             [y_sig_c, y_sig_c], color="black")
-    ax.text(x[1], y_sig_c + 0.02, p_als_sterren(pval_conf),
+    ax.text(x[1], y_sig_c + 0.02, p_to_stars(pval_conf),
             ha="center", va="bottom")
 
     plt.tight_layout()
