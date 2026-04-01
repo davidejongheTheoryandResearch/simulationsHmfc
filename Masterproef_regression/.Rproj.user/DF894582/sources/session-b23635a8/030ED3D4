@@ -1,0 +1,28 @@
+{
+    "id": "030ED3D4",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1773747435476.0,
+    "source_on_save": false,
+    "relative_order": 5,
+    "properties": {
+        "id": "ca3a2238b55e4172801d908ecfb3e246",
+        "name": "single_models",
+        "title": "single_models",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 0,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1773747435476,
+    "read_only": false,
+    "read_only_alternatives": []
+}
