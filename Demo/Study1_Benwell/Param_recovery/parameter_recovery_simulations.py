@@ -67,8 +67,7 @@ def simulate_one_dataset(key):
             iter = 0
             while ((jnp.any(jnp.abs(x_it) > crit_value_extreme)) or ((jnp.max(x_it) - jnp.min(x_it)) < crit_value_fluct)):
   
-                key = jr.PRNGKey(0)
-                k1, k2, k3 = jr.split(key,3)
+                key, k1, k2, k3 = jr.split(key, 4)
 
                 # Sample latent states
                 b_i = mu_x_i * (1 - a_i)
@@ -87,8 +86,8 @@ def simulate_one_dataset(key):
 
                 if iter == max_iter: # if stuck in a loop, resample parameters
                     
-                    key = jr.PRNGKey(seed)
-                    k1, k2, k3 = jr.split(key,3)
+                    key, k1, k2, k3 = jr.split(key, 4)
+
                     # sample new params
                     print('new params sampled!')
                     a_i = tfd.TruncatedNormal(true_mu_a,
@@ -186,7 +185,7 @@ def fit_model(key, emissions, inputs, masks):
 
 # Set up some simulation variables
 num_subjects = 344
-num_trials = 144
+num_trials = 136
 num_iters = 1500
 num_inputs = 3
 num_datasets = 50
@@ -276,7 +275,11 @@ for key in keys: #can't do this with vmap due to memory issues
 
     # based on the summed states we calculate the posterior mean and standard deviation
     mean_states = states_sum / (num_iters - burn_in)  # take average states over all iterations without burn_in
-    sd_states = jnp.sqrt(states_sum_squared/(num_iters - burn_in)-mean_states**2) # chiastic formula for standard deviation
+    var_states = (
+    states_sum_squared / (num_iters - burn_in)
+    - mean_states**2
+    )
+    sd_states = jnp.sqrt(jnp.maximum(var_states, 0.0))
     
     all_posterior_samples_states.append(mean_states)
     all_posterior_samples_states_sd.append(sd_states)
@@ -490,7 +493,7 @@ for dataset in range(num_datasets):
 
     posterior_var_mu_sigmasq.append(jnp.var(all_posterior_samples_mu_sigmasq[dataset][burn_in:]))
     posterior_var_beta_sigmasq.append(jnp.var(all_posterior_samples_beta_sigmasq[dataset][burn_in:]))
-    posterior_var_sigma_mu_x.append(jnp.mean(all_posterior_samples_sigma_mu_x[dataset][burn_in:]))
+    posterior_var_sigma_mu_x.append(jnp.var(all_posterior_samples_sigma_mu_x[dataset][burn_in:]))
     posterior_var_mu_a.append(jnp.var(all_posterior_samples_mu_a[dataset][burn_in:]))
     posterior_var_sigma_a.append(jnp.var(all_posterior_samples_sigma_a[dataset][burn_in:]))
     posterior_var_w0.append(jnp.var(all_posterior_samples_mu_w[dataset][burn_in:,0]))
@@ -557,6 +560,7 @@ df_posterior_means = pd.DataFrame({
     'sigma_w0_var': posterior_var_sigma_w0,
     'sigma_w1_var': posterior_var_sigma_w1,
     'sigma_w2_var': posterior_var_sigma_w2,
+    'sigma_mu_x_var': posterior_var_sigma_mu_x,
     'posterior_q25_mu_sigmasq' : posterior_q25_mu_sigmasq,
     'posterior_q975_mu_sigmasq' : posterior_q975_mu_sigmasq,
     'posterior_q25_beta_sigmasq':posterior_q25_beta_sigmasq,
@@ -596,7 +600,7 @@ df_posterior_means.to_csv(f'{num_trials}trials_{num_subjects}subjects_posterior_
 
 
 # Save environment to dil file
-file_name = '144trials_344subjects.dil'
+file_name = f'{num_subjects}subjects_{num_trials}trials.dil'
 
 list_of_variable_names = (
     "all_lps", "all_true_params", "all_true_states",
